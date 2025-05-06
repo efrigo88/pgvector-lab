@@ -247,26 +247,26 @@ def store_in_postgres(df: DataFrame) -> None:
 
 def prepare_queries(
     queries: List[str],
-    embeddings: List[List[float]],
+    query_embeddings: List[List[float]],
 ) -> List[Dict[str, Any]]:
     """Run queries and prepare results in json format."""
     all_results = []
 
     with get_db_connection() as conn:
         with conn.cursor() as cur:
-            for query, embedding in zip(queries, embeddings):
+            for query, query_embedding in zip(queries, query_embeddings):
                 # Perform similarity search using pgvector
                 cur.execute(
                     """
                     SELECT
                         chunk as text,
                         metadata,
-                        1 - (embedding <=> %s) as similarity
+                        1 - (embedding <=> %s::vector) as similarity
                     FROM documents
-                    ORDER BY embedding <=> %s
+                    ORDER BY embedding <=> %s::vector
                     LIMIT 3;
                 """,
-                    (embedding, embedding),
+                    (query_embedding, query_embedding),
                 )
 
                 results = cur.fetchall()

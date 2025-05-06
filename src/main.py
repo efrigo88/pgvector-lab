@@ -52,7 +52,7 @@ def process_document() -> Tuple[
     )
     embeddings = get_embeddings(chunks, model)
     print("✅ Embeddings generated.")
-    return ids, chunks, metadatas, embeddings
+    return ids, chunks, metadatas, embeddings, model
 
 
 def create_dataframe(
@@ -100,7 +100,7 @@ def deduplicate_data(df: DataFrame) -> DataFrame:
 def main() -> None:
     """Process PDF, transform data, store in PostgreSQL, and run queries."""
     # Process document and generate embeddings
-    ids, chunks, metadatas, embeddings = process_document()
+    ids, chunks, metadatas, embeddings, model = process_document()
 
     df = create_dataframe(ids, chunks, metadatas, embeddings)
 
@@ -130,8 +130,12 @@ def main() -> None:
 
     store_in_postgres(df_deduplicated)
 
+    # Generate embeddings for queries
+    query_embeddings = get_embeddings(QUERIES, model)
+    print("✅ Query embeddings generated.")
+
     # Run queries and save answers
-    answers = prepare_queries(QUERIES, embeddings)
+    answers = prepare_queries(QUERIES, query_embeddings)
     save_json_data(answers, ANSWERS_PATH)
     print(f"✅ Saved answers in {ANSWERS_PATH}")
     print("✅ Process completed!")
