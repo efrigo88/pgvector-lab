@@ -1,21 +1,16 @@
 import os
 import json
-from datetime import datetime
 from typing import List, Dict, Any
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+from datetime import datetime
+import psycopg2
 
-import boto3
 from pyspark.sql import SparkSession
 import pyspark.sql.types as T
 from docling.datamodel.document import InputDocument
 from docling.document_converter import DocumentConverter
 from langchain_ollama import OllamaEmbeddings
 
-
-# Spark configs
-THREADS = "local[4]"
-DRIVER_MEMORY = "8g"
-SHUFFLE_PARTITIONS = "4"
 
 # Define schema
 schema = T.StructType(
@@ -43,9 +38,9 @@ schema = T.StructType(
 # Create Spark session
 spark = (
     SparkSession.builder.appName("TestSpark")
-    .master(THREADS)
-    .config("spark.driver.memory", DRIVER_MEMORY)
-    .config("spark.sql.shuffle.partitions", SHUFFLE_PARTITIONS)
+    .master(os.getenv("THREADS"))
+    .config("spark.driver.memory", os.getenv("DRIVER_MEMORY"))
+    .config("spark.sql.shuffle.partitions", os.getenv("SHUFFLE_PARTITIONS"))
     .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
     .config(
         "spark.sql.catalog.spark_catalog",
@@ -71,24 +66,21 @@ spark = (
 )
 
 
+def get_db_connection():
+    """Create a connection to PostgreSQL."""
+    return psycopg2.connect(
+        host=os.getenv("POSTGRES_HOST"),
+        port=os.getenv("POSTGRES_PORT"),
+        dbname=os.getenv("POSTGRES_DB"),
+        user=os.getenv("POSTGRES_USER"),
+        password=os.getenv("POSTGRES_PASSWORD"),
+    )
+
+
 def parse_pdf(source_path: str) -> InputDocument:
     """Parse the PDF document using DocumentConverter."""
     converter = DocumentConverter()
-    if source_path.startswith("s3://"):
-        # Read from S3 and save to temporary file
-        s3_file = read_from_s3(source_path)
-        temp_file = f"/tmp/{source_path.split('/')[-1]}"
-        with open(temp_file, "wb") as f:
-            f.write(s3_file.read())
-        try:
-            result = converter.convert(temp_file)
-        finally:
-            # Clean up temporary file
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
-    else:
-        # Read from local file
-        result = converter.convert(source_path)
+    result = converter.convert(source_path)
     return result.document
 
 
@@ -151,32 +143,47 @@ def get_embeddings(
 
 
 def prepare_queries(
-    collection: chromadb.Collection,
     model: OllamaEmbeddings,
     queries: List[str],
 ) -> List[Dict[str, Any]]:
     """Run queries and prepare results in json format."""
     all_results = []
 
-    for query in queries:
-        query_embedding = model.embed_documents([query])[0]
-        results = collection.query(
-            query_embeddings=[query_embedding], n_results=3
-        )
-        query_result = {
-            "processed_at": datetime.now().isoformat(),
-            "query": query,
-            "results": [
-                {
-                    "text": doc,
-                    "similarity": sim,
-                }
-                for doc, sim in zip(
-                    results["documents"][0], results["distances"][0]
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            for query in queries:
+                # Get embedding for the query
+                query_embedding = model.embed_documents([query])[0]
+
+                # Perform similarity search using pgvector
+                cur.execute(
+                    """
+                    SELECT 
+                        chunk as text,
+                        metadata,
+                        1 - (embedding <=> %s) as similarity
+                    FROM documents
+                    ORDER BY embedding <=> %s
+                    LIMIT 3;
+                """,
+                    (query_embedding, query_embedding),
                 )
-            ],
-        }
-        all_results.append(query_result)
+
+                results = cur.fetchall()
+
+                query_result = {
+                    "processed_at": datetime.now().isoformat(),
+                    "query": query,
+                    "results": [
+                        {
+                            "text": text,
+                            "metadata": metadata,
+                            "similarity": similarity,
+                        }
+                        for text, metadata, similarity in results
+                    ],
+                }
+                all_results.append(query_result)
 
     return all_results
 
@@ -189,21 +196,7 @@ def save_json_data(
         raise FileExistsError(
             f"File {file_path} already exists and overwrite=False"
         )
-
-    # Create a temporary file
-    temp_file = f"/tmp/{os.path.basename(file_path)}"
-
-    # Write to temporary file
-    with open(temp_file, "w", encoding="utf-8") as f:
+    with open(file_path, "w", encoding="utf-8") as f:
         for item in data:
             json.dump(item, f, ensure_ascii=False)
             f.write("\n")
-
-    # If it's an S3 path, upload the file
-    if file_path.startswith(("s3://", "s3a://")):
-        write_to_s3(temp_file, file_path)
-        # Clean up temporary file
-        os.remove(temp_file)
-    else:
-        # Move the temporary file to the final location
-        os.rename(temp_file, file_path)
