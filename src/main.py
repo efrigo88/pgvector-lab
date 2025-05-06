@@ -128,14 +128,11 @@ def main() -> None:
     )
     print(f"✅ Saved JSONL file in {JSONL_PATH}")
 
-    store_in_postgres(df_deduplicated)
-
-    # Generate embeddings for queries
-    query_embeddings = get_embeddings(QUERIES, model)
-    print("✅ Query embeddings generated.")
+    # Store in PostgreSQL using LangChain's PGVector
+    store_in_postgres(df_deduplicated, model)
 
     # Run queries and save answers
-    answers = prepare_queries(QUERIES, query_embeddings)
+    answers = prepare_queries(QUERIES, model)
     save_json_data(answers, ANSWERS_PATH)
     print(f"✅ Saved answers in {ANSWERS_PATH}")
     print("✅ Process completed!")

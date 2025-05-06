@@ -8,6 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openjdk-17-jdk-headless \
     curl \
     procps \
+    libpq-dev \
+    gcc \
+    python3-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Set JAVA_HOME based on architecture

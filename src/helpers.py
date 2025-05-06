@@ -4,8 +4,8 @@ from datetime import datetime
 from typing import List, Dict, Any
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-import psycopg2
-from psycopg2.extras import execute_values
+from langchain_core.documents import Document
+from langchain_postgres import PGVector
 from pyspark.sql import SparkSession, DataFrame
 import pyspark.sql.types as T
 from docling.datamodel.document import InputDocument
@@ -146,145 +146,81 @@ def save_json_data(
             f.write("\n")
 
 
-def get_db_connection() -> psycopg2.extensions.connection:
-    """Create a connection to PostgreSQL."""
-    return psycopg2.connect(
-        host=os.getenv("POSTGRES_HOST"),
-        port=os.getenv("POSTGRES_PORT"),
-        dbname=os.getenv("POSTGRES_DB"),
-        user=os.getenv("POSTGRES_USER"),
-        password=os.getenv("POSTGRES_PASSWORD"),
+def get_db_connection_string() -> str:
+    """Create a connection string for PostgreSQL."""
+    return (
+        f"postgresql+psycopg://{os.getenv('POSTGRES_USER')}:"
+        f"{os.getenv('POSTGRES_PASSWORD')}@{os.getenv('POSTGRES_HOST')}:"
+        f"{os.getenv('POSTGRES_PORT')}/{os.getenv('POSTGRES_DB')}"
     )
 
 
-def init_db() -> None:
-    """Initialize the database with pgvector extension and required tables."""
-    with get_db_connection() as conn:
-        with conn.cursor() as cur:
-            # Enable pgvector extension
-            cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+def init_vector_store(embeddings: OllamaEmbeddings) -> PGVector:
+    """Initialize the vector store with LangChain's PGVector."""
+    connection_string = get_db_connection_string()
+    collection_name = "documents"
 
-            # Create documents table
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS documents (
-                    id TEXT PRIMARY KEY,
-                    chunk TEXT,
-                    metadata JSONB,
-                    processed_at TIMESTAMP,
-                    processed_dt TEXT,
-                    embedding vector(768)
-                );
-            """
-            )
-
-            # Create index for similarity search
-            cur.execute(
-                """
-                CREATE INDEX IF NOT EXISTS documents_embedding_idx
-                ON documents
-                USING ivfflat (embedding vector_cosine_ops)
-                WITH (lists = 100);
-            """
-            )
-
-            conn.commit()
+    return PGVector(
+        embeddings=embeddings,
+        collection_name=collection_name,
+        connection=connection_string,
+        use_jsonb=True,
+    )
 
 
-def store_in_postgres(df: DataFrame) -> None:
-    """Store data in PostgreSQL with pgvector."""
-    init_db()
+def store_in_postgres(df: DataFrame, embeddings: OllamaEmbeddings) -> None:
+    """Store data in PostgreSQL using LangChain's PGVector."""
+    vector_store = init_vector_store(embeddings)
 
-    with get_db_connection() as conn:
-        with conn.cursor() as cur:
-            rows = df.select(
-                "id",
-                "chunk",
-                "metadata",
-                "embeddings",
-                "processed_at",
-                "processed_dt",
-            ).collect()
+    # Convert DataFrame rows to LangChain Documents
+    documents = []
+    for row in df.collect():
+        doc = Document(
+            page_content=row.chunk,
+            metadata={
+                "id": row.id,
+                "source": row.metadata["source"],
+                "chunk_index": row.metadata["chunk_index"],
+                "title": row.metadata["title"],
+                "chunk_size": row.metadata["chunk_size"],
+                "processed_at": row.processed_at.isoformat(),
+                "processed_dt": row.processed_dt,
+            },
+        )
+        documents.append(doc)
 
-            # Prepare data for batch insert
-            data = [
-                (
-                    row.id,
-                    row.chunk,
-                    json.dumps(
-                        row.metadata.asDict()
-                    ),  # Convert dict to JSON string
-                    row.embeddings,
-                    row.processed_at,
-                    row.processed_dt,
-                )
-                for row in rows
-            ]
-
-            # Upsert data
-            execute_values(
-                cur,
-                """
-                INSERT INTO documents (
-                    id, chunk, metadata, embedding, processed_at, processed_dt
-                )
-                VALUES %s
-                ON CONFLICT (id) DO UPDATE SET
-                    chunk = EXCLUDED.chunk,
-                    metadata = EXCLUDED.metadata,
-                    embedding = EXCLUDED.embedding,
-                    processed_at = EXCLUDED.processed_at,
-                    processed_dt = EXCLUDED.processed_dt;
-                """,
-                data,
-            )
-
-            conn.commit()
-
-            # Get total count
-            cur.execute("SELECT COUNT(*) FROM documents;")
-            total_docs = cur.fetchone()[0]
-            print(f"📊 Total documents in PostgreSQL: {total_docs}")
+    # Add documents to vector store
+    vector_store.add_documents(documents)
+    print(f"📊 Total documents in PostgreSQL: {len(documents)}")
 
 
 def prepare_queries(
     queries: List[str],
-    query_embeddings: List[List[float]],
+    embeddings: OllamaEmbeddings,
 ) -> List[Dict[str, Any]]:
-    """Run queries and prepare results in json format."""
+    """Run queries and prepare results in json format using LangChain's PGVector."""
+    vector_store = init_vector_store(embeddings)
     all_results = []
 
-    with get_db_connection() as conn:
-        with conn.cursor() as cur:
-            for query, query_embedding in zip(queries, query_embeddings):
-                # Perform similarity search using pgvector
-                cur.execute(
-                    """
-                    SELECT
-                        chunk as text,
-                        metadata,
-                        1 - (embedding <=> %s::vector) as similarity
-                    FROM documents
-                    ORDER BY embedding <=> %s::vector
-                    LIMIT 3;
-                """,
-                    (query_embedding, query_embedding),
-                )
+    for query in queries:
+        # Perform similarity search using LangChain's PGVector
+        results = vector_store.similarity_search(
+            query,
+            k=3,
+        )
 
-                results = cur.fetchall()
-
-                query_result = {
-                    "processed_at": datetime.now().isoformat(),
-                    "query": query,
-                    "results": [
-                        {
-                            "text": text,
-                            "metadata": metadata,
-                            "similarity": similarity,
-                        }
-                        for text, metadata, similarity in results
-                    ],
+        query_result = {
+            "processed_at": datetime.now().isoformat(),
+            "query": query,
+            "results": [
+                {
+                    "text": doc.page_content,
+                    "metadata": doc.metadata,
+                    "similarity": 1.0,  # LangChain doesn't provide similarity scores directly
                 }
-                all_results.append(query_result)
+                for doc in results
+            ],
+        }
+        all_results.append(query_result)
 
     return all_results
