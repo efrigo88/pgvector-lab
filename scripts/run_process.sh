@@ -25,4 +25,6 @@ if [[ "$response" =~ ^[Yy]$ ]]; then
     echo "🔽 Running docker compose down..."
     docker compose down -v
     echo "✅ Docker compose down completed"
+else
+    echo "ℹ️  If you want to run the process again, use: docker exec -it app python -m src.main"
 fi

@@ -146,7 +146,7 @@ def save_json_data(
             f.write("\n")
 
 
-def get_db_connection():
+def get_db_connection() -> psycopg2.extensions.connection:
     """Create a connection to PostgreSQL."""
     return psycopg2.connect(
         host=os.getenv("POSTGRES_HOST"),
@@ -157,7 +157,7 @@ def get_db_connection():
     )
 
 
-def init_db():
+def init_db() -> None:
     """Initialize the database with pgvector extension and required tables."""
     with get_db_connection() as conn:
         with conn.cursor() as cur:
