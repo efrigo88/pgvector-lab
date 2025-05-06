@@ -26,8 +26,8 @@ INPUT_PATH = "./data/input/Example_DCL.pdf"
 OUTPUT_PATH = "./data/output/delta_table"
 JSONL_PATH = "./data/output/jsonl_file"
 ANSWERS_PATH = "./data/answers/answers.jsonl"
-CHUNK_SIZE = 750
-CHUNK_OVERLAP = 100
+CHUNK_SIZE = 200
+CHUNK_OVERLAP = 20
 
 
 def process_document() -> Tuple[

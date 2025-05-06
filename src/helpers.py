@@ -211,7 +211,9 @@ def store_in_postgres(df: DataFrame) -> None:
                 (
                     row.id,
                     row.chunk,
-                    json.dumps(row.metadata.asDict()),  # Convert dict to JSON string
+                    json.dumps(
+                        row.metadata.asDict()
+                    ),  # Convert dict to JSON string
                     row.embeddings,
                     row.processed_at,
                     row.processed_dt,
