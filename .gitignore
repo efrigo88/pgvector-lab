@@ -48,10 +48,8 @@ logs/
 .DS_Store
 Thumbs.db
 
-# Delta table
-# Delta table output
-/data/output/
-
+# Iceberg
+/data/warehouse/
 
 # Terraform
 .terraform/

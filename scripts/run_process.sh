@@ -4,6 +4,7 @@
 set -e
 
 echo "🚀 docker compose up -d --build..."
+docker compose down -v
 docker compose up -d --build
 
 echo "⏳ Waiting for Ollama container to be ready..."
@@ -17,14 +18,5 @@ echo "🚀 Starting the process..."
 docker exec -it app python -m src.main
 
 echo "✅ Process finished successfully!"
-
-# Ask user if they want to run docker compose down
-read -p "Do you want to run docker compose down? (y/N): " response
-
-if [[ "$response" =~ ^[Yy]$ ]]; then
-    echo "🔽 Running docker compose down..."
-    docker compose down -v
-    echo "✅ Docker compose down completed"
-else
-    echo "ℹ️  If you want to run the process again, use: docker exec -it app python -m src.main"
-fi
+echo "ℹ️  If you want to run the process again, use: docker exec -it app python -m src.main"
+echo "ℹ️  If you're done, run: docker compose down -v"

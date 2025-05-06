@@ -3,6 +3,7 @@ import json
 from datetime import datetime
 from typing import List, Dict, Any
 
+import pyspark.sql.functions as F
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from langchain_postgres import PGVector
@@ -13,8 +14,7 @@ from docling.document_converter import DocumentConverter
 from langchain_ollama import OllamaEmbeddings
 
 
-# Define schema
-schema = T.StructType(
+SCHEMA = T.StructType(
     [
         T.StructField("id", T.StringType(), True),
         T.StructField("chunk", T.StringType(), True),
@@ -42,14 +42,19 @@ spark = (
     .master(os.getenv("THREADS"))
     .config("spark.driver.memory", os.getenv("DRIVER_MEMORY"))
     .config("spark.sql.shuffle.partitions", os.getenv("SHUFFLE_PARTITIONS"))
-    .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
     .config(
-        "spark.sql.catalog.spark_catalog",
-        "org.apache.spark.sql.delta.catalog.DeltaCatalog",
+        "spark.sql.extensions",
+        "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
     )
     .config(
+        "spark.sql.catalog.spark_catalog",
+        "org.apache.iceberg.spark.SparkSessionCatalog",
+    )
+    .config("spark.sql.catalog.spark_catalog.type", "hadoop")
+    .config("spark.sql.catalog.spark_catalog.warehouse", "./data/warehouse")
+    .config(
         "spark.jars.packages",
-        "io.delta:delta-spark_2.12:3.2.0,"
+        "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0,"
         "org.apache.hadoop:hadoop-aws:3.3.4,"
         "com.amazonaws:aws-java-sdk-bundle:1.12.262",
     )
@@ -65,6 +70,48 @@ spark = (
     .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "true")
     .getOrCreate()
 )
+
+
+def create_dataframe(
+    ids: List[str],
+    chunks: List[str],
+    metadatas: List[Dict[str, Any]],
+    embeddings: List[List[float]],
+) -> DataFrame:
+    """Create and save DataFrame with processed data."""
+    df = spark.createDataFrame(
+        [
+            {
+                "id": id_val,
+                "chunk": chunk,
+                "metadata": metadata,
+                "processed_at": datetime.now(),
+                "processed_dt": datetime.now().strftime("%Y-%m-%d"),
+                "embeddings": embedding,
+            }
+            for id_val, chunk, metadata, embedding in zip(
+                ids, chunks, metadatas, embeddings
+            )
+        ],
+        schema=SCHEMA,
+    )
+    return df
+
+
+def deduplicate_data(df: DataFrame) -> DataFrame:
+    """Deduplicate data and return processed DataFrame."""
+    df = (
+        df.orderBy(F.col("processed_at").desc())
+        .groupBy("id")
+        .agg(
+            F.first("processed_at").alias("processed_at"),
+            F.first("processed_dt").alias("processed_dt"),
+            F.first("chunk").alias("chunk"),
+            F.first("metadata").alias("metadata"),
+            F.first("embeddings").alias("embeddings"),
+        )
+    )
+    return df
 
 
 def parse_pdf(source_path: str) -> InputDocument:
@@ -130,6 +177,21 @@ def get_embeddings(
 ) -> List[List[float]]:
     """Get embeddings for a list of chunks using Ollama embeddings."""
     return model.embed_documents(chunks)
+
+
+def create_iceberg_table(df: DataFrame, table_name: str) -> None:
+    """Create Iceberg table if it doesn't exist."""
+    # Register DataFrame as a temporary view
+    df.createOrReplaceTempView("temp_df")
+
+    spark.sql(
+        f"CREATE TABLE IF NOT EXISTS {table_name} "
+        "USING iceberg AS SELECT * FROM temp_df LIMIT 0"
+    )
+
+    # Save DataFrame to Iceberg table
+    df.write.format("iceberg").mode("overwrite").saveAsTable(table_name)
+    print(f"✅ Saved Iceberg table {table_name}")
 
 
 def save_json_data(
