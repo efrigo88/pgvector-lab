@@ -174,6 +174,7 @@ def store_in_postgres(df: DataFrame, embeddings: OllamaEmbeddings) -> None:
 
     # Convert DataFrame rows to LangChain Documents
     documents = []
+    ids = []
     for row in df.collect():
         doc = Document(
             page_content=row.chunk,
@@ -188,9 +189,10 @@ def store_in_postgres(df: DataFrame, embeddings: OllamaEmbeddings) -> None:
             },
         )
         documents.append(doc)
+        ids.append(row.id)
 
-    # Add documents to vector store
-    vector_store.add_documents(documents)
+    # Add documents to vector store with upsert
+    vector_store.add_documents(documents, ids=ids)
     print(f"📊 Total documents in PostgreSQL: {len(documents)}")
 
 
