@@ -27,7 +27,7 @@ services:
     command: tail -f /dev/null
 
   postgres:
-    image: pgvector/pgvector:latest
+    image: ankane/pgvector:latest
     container_name: postgres
     environment:
       - POSTGRES_DB=${POSTGRES_DB}
