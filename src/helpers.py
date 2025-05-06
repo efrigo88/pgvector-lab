@@ -173,7 +173,7 @@ def init_db():
                     metadata JSONB,
                     processed_at TIMESTAMP,
                     processed_dt TEXT,
-                    embedding vector(1536)
+                    embedding vector(768)
                 );
             """
             )
@@ -211,7 +211,7 @@ def store_in_postgres(df: DataFrame) -> None:
                 (
                     row.id,
                     row.chunk,
-                    row.metadata.asDict(),
+                    json.dumps(row.metadata.asDict()),  # Convert dict to JSON string
                     row.embeddings,
                     row.processed_at,
                     row.processed_dt,
