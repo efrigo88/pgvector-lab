@@ -217,10 +217,11 @@ def get_db_connection_string() -> str:
     )
 
 
-def init_vector_store(embeddings: OllamaEmbeddings) -> PGVector:
+def init_vector_store(
+    collection_name: str, embeddings: OllamaEmbeddings
+) -> PGVector:
     """Initialize the vector store with LangChain's PGVector."""
     connection_string = get_db_connection_string()
-    collection_name = "documents"
 
     return PGVector(
         embeddings=embeddings,
@@ -230,40 +231,48 @@ def init_vector_store(embeddings: OllamaEmbeddings) -> PGVector:
     )
 
 
-def store_in_postgres(df: DataFrame, embeddings: OllamaEmbeddings) -> None:
+def store_in_postgres(
+    collection_name: str, df: DataFrame, embeddings: OllamaEmbeddings
+) -> None:
     """Store data in PostgreSQL using LangChain's PGVector."""
-    vector_store = init_vector_store(embeddings)
+    vector_store = init_vector_store(collection_name, embeddings)
 
     # Convert DataFrame rows to LangChain Documents
     documents = []
     ids = []
     for row in df.collect():
+        # Create a collection-specific unique ID
+        unique_id = f"{collection_name}_{row.id}"
         doc = Document(
             page_content=row.chunk,
             metadata={
-                "id": row.id,
+                "id": unique_id,
                 "source": row.metadata["source"],
                 "chunk_index": row.metadata["chunk_index"],
                 "title": row.metadata["title"],
                 "chunk_size": row.metadata["chunk_size"],
                 "processed_at": row.processed_at.isoformat(),
                 "processed_dt": row.processed_dt,
+                "collection": collection_name,
             },
         )
         documents.append(doc)
-        ids.append(row.id)
+        ids.append(unique_id)
 
-    # Add documents to vector store with upsert
+    # Add documents to vector store with collection-specific IDs for upsert
     vector_store.add_documents(documents, ids=ids)
-    print(f"📊 Total documents in PostgreSQL: {len(documents)}")
+    print(
+        f"📊 Total documents in PostgreSQL collection '{collection_name}': {len(documents)}"
+    )
 
 
 def prepare_queries(
+    collection_name: str,
     queries: List[str],
     embeddings: OllamaEmbeddings,
 ) -> List[Dict[str, Any]]:
     """Run queries and prepare results in json format using LangChain's PGVector."""
-    vector_store = init_vector_store(embeddings)
+    vector_store = init_vector_store(collection_name, embeddings)
     all_results = []
 
     for query in queries:
@@ -272,8 +281,8 @@ def prepare_queries(
             query,
             k=3,
         )
-
         query_result = {
+            "collection": collection_name,
             "processed_at": datetime.now().isoformat(),
             "query": query,
             "results": [

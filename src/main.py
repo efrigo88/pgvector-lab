@@ -24,6 +24,7 @@ from .queries import QUERIES
 INPUT_PATH = "./data/input/Example_DCL.pdf"
 JSONL_PATH = "./data/jsonl_file"
 ANSWERS_PATH = "./data/answers/answers.jsonl"
+COLLECTION_NAME = "client_name_1"
 CHUNK_SIZE = 200
 CHUNK_OVERLAP = 20
 
@@ -79,10 +80,10 @@ def main() -> None:
     print(f"✅ Saved JSONL file in {JSONL_PATH}")
 
     # Store in PostgreSQL using LangChain's PGVector
-    store_in_postgres(df_deduplicated, model)
+    store_in_postgres(COLLECTION_NAME, df_deduplicated, model)
 
     # Run queries and save answers
-    answers = prepare_queries(QUERIES, model)
+    answers = prepare_queries(COLLECTION_NAME, QUERIES, model)
     save_json_data(answers, ANSWERS_PATH)
     print(f"✅ Saved answers in {ANSWERS_PATH}")
     print("✅ Process completed!")
