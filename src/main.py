@@ -4,6 +4,7 @@ from typing import List, Dict, Any, Tuple
 from langchain_ollama import OllamaEmbeddings
 
 from .helpers import (
+    get_collection_name,
     parse_pdf,
     get_text_content,
     get_chunks,
@@ -21,10 +22,10 @@ from .helpers import (
 
 from .queries import QUERIES
 
-INPUT_PATH = "./data/input/Example_DCL.pdf"
-JSONL_PATH = "./data/jsonl_file"
-ANSWERS_PATH = "./data/answers/answers.jsonl"
-COLLECTION_NAME = "client_name_1"
+INPUT_PATH = "./data/input/client=client_name_1/Example_DCL.pdf"
+COLLECTION_NAME = get_collection_name(INPUT_PATH)
+ANSWERS_PATH = f"./data/answers/client={COLLECTION_NAME}/answers.jsonl"
+
 CHUNK_SIZE = 200
 CHUNK_OVERLAP = 20
 
@@ -70,16 +71,7 @@ def main() -> None:
     df_deduplicated = deduplicate_data(df_loaded)
     print(f"✅ Deduplicated DataFrame in {iceberg_tbl_name}")
 
-    # Save DataFrame as JSONL file for development purposes
-    (
-        df_deduplicated.repartition(1)
-        .write.format("json")
-        .mode("overwrite")
-        .save(JSONL_PATH)
-    )
-    print(f"✅ Saved JSONL file in {JSONL_PATH}")
-
-    # Store in PostgreSQL using LangChain's PGVector
+    # Store in PostgreSQL using LangChain's PGVectorStore
     store_in_postgres(COLLECTION_NAME, df_deduplicated, model)
 
     # Run queries and save answers

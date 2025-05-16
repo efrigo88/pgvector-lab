@@ -6,7 +6,7 @@ from typing import List, Dict, Any
 import pyspark.sql.functions as F
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
-from langchain_postgres import PGVector
+from langchain_postgres import PGEngine, PGVectorStore
 from pyspark.sql import SparkSession, DataFrame
 import pyspark.sql.types as T
 from docling.datamodel.document import InputDocument
@@ -70,6 +70,11 @@ spark = (
     .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "true")
     .getOrCreate()
 )
+
+
+def get_collection_name(path: str) -> str:
+    """Get the collection name from the source path."""
+    return path.split("/")[-2].split("=")[-1]
 
 
 def create_dataframe(
@@ -202,6 +207,10 @@ def save_json_data(
         raise FileExistsError(
             f"File {file_path} already exists and overwrite=False"
         )
+    
+    # Create directory structure if it doesn't exist
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    
     with open(file_path, "w", encoding="utf-8") as f:
         for item in data:
             json.dump(item, f, ensure_ascii=False)
@@ -211,7 +220,7 @@ def save_json_data(
 def get_db_connection_string() -> str:
     """Create a connection string for PostgreSQL."""
     return (
-        f"postgresql+psycopg://{os.getenv('POSTGRES_USER')}:"
+        f"postgresql+asyncpg://{os.getenv('POSTGRES_USER')}:"
         f"{os.getenv('POSTGRES_PASSWORD')}@{os.getenv('POSTGRES_HOST')}:"
         f"{os.getenv('POSTGRES_PORT')}/{os.getenv('POSTGRES_DB')}"
     )
@@ -219,48 +228,55 @@ def get_db_connection_string() -> str:
 
 def init_vector_store(
     collection_name: str, embeddings: OllamaEmbeddings
-) -> PGVector:
-    """Initialize the vector store with LangChain's PGVector."""
+) -> PGEngine:
+    """Initialize the vector store with LangChain's PGEngine."""
     connection_string = get_db_connection_string()
+    engine = PGEngine.from_connection_string(url=connection_string)
 
-    return PGVector(
-        embeddings=embeddings,
-        collection_name=collection_name,
-        connection=connection_string,
-        use_jsonb=True,
-    )
+    try:
+        # Try to initialize the table, it will fail if it already exists
+        engine.init_vectorstore_table(
+            table_name=collection_name,
+            vector_size=len(embeddings.embed_query("test")),
+        )
+    except Exception as e:
+        if "already exists" not in str(e):
+            raise
+        print(f"ℹ️ Table '{collection_name}' already exists, continuing...")
+
+    return engine
 
 
 def store_in_postgres(
     collection_name: str, df: DataFrame, embeddings: OllamaEmbeddings
 ) -> None:
-    """Store data in PostgreSQL using LangChain's PGVector."""
-    vector_store = init_vector_store(collection_name, embeddings)
+    """Store data in PostgreSQL using LangChain's PGVectorStore."""
+    engine = init_vector_store(collection_name, embeddings)
+
+    # Create vector store instance
+    vector_store = PGVectorStore.create_sync(
+        engine,
+        embedding_service=embeddings,
+        table_name=collection_name,
+    )
 
     # Convert DataFrame rows to LangChain Documents
     documents = []
-    ids = []
     for row in df.collect():
-        # Create a collection-specific unique ID
-        unique_id = f"{collection_name}_{row.id}"
         doc = Document(
             page_content=row.chunk,
             metadata={
-                "id": unique_id,
                 "source": row.metadata["source"],
                 "chunk_index": row.metadata["chunk_index"],
                 "title": row.metadata["title"],
                 "chunk_size": row.metadata["chunk_size"],
                 "processed_at": row.processed_at.isoformat(),
                 "processed_dt": row.processed_dt,
-                "collection": collection_name,
             },
         )
         documents.append(doc)
-        ids.append(unique_id)
 
-    # Add documents to vector store with collection-specific IDs for upsert
-    vector_store.add_documents(documents, ids=ids)
+    vector_store.add_documents(documents)
     print(
         f"📊 Total documents in PostgreSQL collection '{collection_name}': {len(documents)}"
     )
@@ -271,12 +287,20 @@ def prepare_queries(
     queries: List[str],
     embeddings: OllamaEmbeddings,
 ) -> List[Dict[str, Any]]:
-    """Run queries and prepare results in json format using LangChain's PGVector."""
-    vector_store = init_vector_store(collection_name, embeddings)
+    """Run queries and prepare results in json format using LangChain's PGVectorStore."""
+    engine = init_vector_store(collection_name, embeddings)
+
+    # Create vector store instance
+    vector_store = PGVectorStore.create_sync(
+        engine,
+        embedding_service=embeddings,
+        table_name=collection_name,
+    )
+
     all_results = []
 
     for query in queries:
-        # Perform similarity search using LangChain's PGVector
+        # Perform similarity search using LangChain's PGVectorStore
         results = vector_store.similarity_search(
             query,
             k=3,
