@@ -1,6 +1,6 @@
-# PDF Document Processing with pgvector
+# PDF Document Processing with PGVectorStore
 
-This project processes PDF documents, generates embeddings using Ollama, and stores them in PostgreSQL with pgvector for semantic search capabilities.
+This project processes PDF documents, generates embeddings using Ollama, and stores them in PostgreSQL with PGVectorStore for semantic search capabilities.
 
 ## Prerequisites
 
