@@ -207,10 +207,10 @@ def save_json_data(
         raise FileExistsError(
             f"File {file_path} already exists and overwrite=False"
         )
-    
+
     # Create directory structure if it doesn't exist
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
-    
+
     with open(file_path, "w", encoding="utf-8") as f:
         for item in data:
             json.dump(item, f, ensure_ascii=False)
